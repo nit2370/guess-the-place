@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Join a Guess the Place game and compete with friends!">
+  <title>Guess the Place 🌍 | Game Room</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div class="bg-animation">
+    <div class="orb"></div>
+    <div class="orb"></div>
+    <div class="orb"></div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <nav style="display:flex;justify-content:space-between;align-items:center;padding:20px 40px;position:relative;z-index:1;">
+    <a href="/" class="logo" style="text-decoration:none"><span class="emoji">🌍</span>GuessThePlace</a>
+    <div id="navBadge"></div>
+  </nav>
+
+  <main class="container">
+    <div class="page" style="min-height: calc(100vh - 80px);">
+
+      <!-- ==================== JOIN SCREEN ==================== -->
+      <div class="game-screen active" id="joinScreen">
+        <div class="card" style="max-width:450px;width:100%;text-align:center;">
+          <div style="font-size:3rem;margin-bottom:12px;">🌍</div>
+          <h2>Join the Game</h2>
+          <p style="color:var(--text-secondary);margin:8px 0 24px;">Enter your name to join the fun!</p>
+
+          <div class="input-group mb-3">
+            <label>Your Name</label>
+            <input type="text" id="playerNameInput" placeholder="Enter your nickname..." maxlength="20" autofocus>
+          </div>
+
+          <button class="btn btn-primary w-full" id="joinBtn" onclick="joinGame()">
+            🎮 Join Game
+          </button>
+
+          <p id="joinError" style="color:var(--accent-5);margin-top:12px;font-size:0.9rem;display:none;"></p>
+        </div>
+      </div>
+
+      <!-- ==================== LOBBY SCREEN ==================== -->
+      <div class="game-screen" id="lobbyScreen">
+        <div class="lobby-container">
+          <h1 style="font-size:2.5rem;margin-bottom:8px;">Game Lobby</h1>
+          <p style="color:var(--text-secondary);" id="lobbySubtitle">Waiting for the host to start...</p>
+
+          <!-- Host: Share Link -->
+          <div id="hostShareSection" class="hidden">
+            <div class="share-link-box" style="max-width:500px;margin:20px auto;">
+              <input type="text" id="lobbyShareLink" readonly>
+              <button class="btn btn-primary btn-sm" onclick="copyLink()">📋 Copy</button>
+            </div>
+          </div>
+
+          <!-- Player Count -->
+          <div class="mt-3 mb-2">
+            <div class="player-count" id="playerCountDisplay">0</div>
+            <p style="color:var(--text-secondary);">players connected</p>
+          </div>
+
+          <!-- Players List -->
+          <div class="players-grid" id="playersGrid"></div>
+
+          <!-- Host Start Button -->
+          <div id="hostControls" class="hidden mt-3">
+            <button class="btn btn-success btn-lg" id="startGameBtn" onclick="startGame()">
+              🚀 Start Game
+            </button>
+          </div>
+
+          <!-- Waiting indicator for players -->
+          <div id="playerWaiting" class="mt-3">
+            <p style="color:var(--text-muted);font-size:1rem;">
+              ⏳ Waiting for host to start the game<span class="waiting-dots"></span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== COUNTDOWN SCREEN ==================== -->
+      <div class="game-screen" id="countdownScreen">
+        <div class="text-center">
+          <h2 style="color:var(--text-secondary);margin-bottom:20px;">Game Starting!</h2>
+          <div id="countdownNumber" style="font-family:var(--font-display);font-size:8rem;font-weight:900;background:var(--gradient-primary);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:pulse 1s ease infinite;"></div>
+          <p style="color:var(--text-muted);margin-top:12px;" id="gameInfo"></p>
+        </div>
+      </div>
+
+      <!-- ==================== PLAYING SCREEN ==================== -->
+      <div class="game-screen" id="playingScreen">
+        <div class="w-full flex justify-between items-center mb-2" style="max-width:700px;">
+          <div class="round-badge">
+            Round <span id="currentRound">1</span> / <span id="totalRounds">5</span>
+          </div>
+          <div class="badge badge-cyan" id="answeredBadge">
+            ✅ <span id="answeredCount">0</span>/<span id="totalPlayers">0</span> answered
+          </div>
+        </div>
+
+        <!-- Image -->
+        <div class="game-image-container">
+          <img id="gameImage" src="" alt="Guess this place!">
+        </div>
+
+        <!-- Timer -->
+        <div class="timer-container">
+          <div class="timer-bar-bg">
+            <div class="timer-bar" id="timerBar" style="width:100%;"></div>
+          </div>
+          <div class="timer-text">
+            <span>⏱️ Time remaining</span>
+            <span class="time-left" id="timeLeft">30s</span>
+          </div>
+        </div>
+
+        <!-- Hints -->
+        <div class="hints-container" id="hintsContainer"></div>
+
+        <!-- Answer Input -->
+        <div class="answer-section" id="answerSection">
+          <div class="answer-input-container">
+            <input type="text" id="guessInput" placeholder="Type the name of this place..." autocomplete="off">
+            <button class="btn btn-primary" id="submitGuessBtn" onclick="submitGuess()">
+              Submit →
+            </button>
+          </div>
+        </div>
+
+        <!-- Answered Correctly indicator -->
+        <div class="answered-correctly hidden" id="answeredCorrectly">
+          ✅ You got it! Waiting for round to end...
+        </div>
+
+        <!-- Mini leaderboard -->
+        <div class="mini-leaderboard mt-3" id="miniLeaderboard">
+          <h3 style="margin-bottom:12px;">🏆 Leaderboard</h3>
+          <div id="miniLeaderboardList"></div>
+        </div>
+      </div>
+
+      <!-- ==================== ROUND RESULT SCREEN ==================== -->
+      <div class="game-screen" id="roundResultScreen">
+        <div class="round-result w-full" style="max-width:700px;">
+          <div class="round-badge mb-2">
+            Round <span id="resultRound">1</span> / <span id="resultTotalRounds">5</span> — Results
+          </div>
+
+          <div class="game-image-container" style="max-width:500px;margin:16px auto;">
+            <img id="resultImage" src="" alt="Place revealed">
+          </div>
+
+          <p style="color:var(--text-secondary);margin-top:16px;">The answer was:</p>
+          <div class="correct-answer-reveal" id="revealAnswer">Eiffel Tower</div>
+
+          <div class="flex justify-center gap-2 flex-wrap">
+            <div class="result-stat">✅ <span id="resultCorrectCount">0</span> got it right</div>
+            <div class="result-stat">👥 <span id="resultTotalCount">0</span> total players</div>
+          </div>
+
+          <p style="color:var(--text-muted);margin-top:20px;font-size:0.9rem;">
+            Next round starting soon<span class="waiting-dots"></span>
+          </p>
+
+          <!-- Leaderboard after round -->
+          <div class="mini-leaderboard mt-3" style="max-width:500px;margin-left:auto;margin-right:auto;">
+            <h3 style="margin-bottom:12px;">🏆 Current Standings</h3>
+            <div id="roundResultLeaderboard"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== FINAL RESULTS SCREEN ==================== -->
+      <div class="game-screen" id="finalScreen">
+        <div class="text-center w-full">
+          <h1 style="font-size:2.5rem;margin-bottom:4px;">🏆 Game Over!</h1>
+          <p style="color:var(--text-secondary);margin-bottom:8px;" id="winnerAnnouncement"></p>
+
+          <!-- Podium -->
+          <div class="podium-container" id="podiumContainer"></div>
+
+          <!-- Full Leaderboard -->
+          <div class="full-leaderboard" id="fullLeaderboard">
+            <h3 style="margin-bottom:16px;">📊 Full Rankings</h3>
+            <div id="fullLeaderboardList"></div>
+          </div>
+
+          <div class="mt-4 flex justify-center gap-2 flex-wrap">
+            <a href="/" class="btn btn-secondary">🏠 Home</a>
+            <a href="/host.html" class="btn btn-primary">🎯 Host New Game</a>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

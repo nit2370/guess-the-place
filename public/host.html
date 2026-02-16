@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Set up a Guess the Place game - Upload images, configure rounds, and share with friends">
+  <title>Host a Game | Guess the Place 🌍</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="bg-animation">
+    <div class="orb"></div>
+    <div class="orb"></div>
+    <div class="orb"></div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <nav style="display:flex;justify-content:space-between;align-items:center;padding:20px 40px;position:relative;z-index:1;">
+    <a href="/" class="logo" style="text-decoration:none"><span class="emoji">🌍</span>GuessThePlace</a>
+    <span class="badge badge-purple">🎯 Host Mode</span>
+  </nav>
+
+  <main class="container" style="padding-bottom:60px;">
+    <!-- Step 1: Upload Images -->
+    <div id="setupStep1">
+      <div class="text-center mb-3" style="animation:fadeIn 0.5s ease">
+        <h1 style="font-size:2.5rem;">Set Up Your Game</h1>
+        <p class="subtitle" style="margin:8px auto 0;">Upload images of famous places. Players will try to guess the name!</p>
+      </div>
+
+      <div class="host-setup-layout mt-4">
+        <div>
+          <!-- Upload Zone -->
+          <div class="upload-zone" id="uploadZone">
+            <div class="icon">📸</div>
+            <div class="text">
+              <strong>Drag & drop images here</strong><br>
+              or click to browse
+            </div>
+            <p style="margin-top:12px;font-size:0.8rem;color:var(--text-muted);">Supports JPG, PNG, WebP • Max 5MB each</p>
+            <input type="file" id="fileInput" multiple accept="image/*" style="display:none">
+          </div>
+
+          <!-- Image Preview Grid -->
+          <div class="image-grid" id="imageGrid"></div>
+
+          <div id="imageCounter" class="mt-2 text-center" style="color:var(--text-muted);font-size:0.9rem;display:none;">
+            <span id="imageCount">0</span> images added
+          </div>
+        </div>
+
+        <!-- Settings Sidebar -->
+        <div class="settings-sidebar">
+          <div class="card">
+            <h3 style="margin-bottom:20px;">⚙️ Game Settings</h3>
+
+            <div class="input-group mb-3">
+              <label>Time per Round</label>
+              <select id="roundTime">
+                <option value="15">15 seconds (Fast!)</option>
+                <option value="30" selected>30 seconds (Normal)</option>
+                <option value="45">45 seconds (Relaxed)</option>
+                <option value="60">60 seconds (Easy)</option>
+              </select>
+            </div>
+
+            <div class="input-group mb-3">
+              <label>Number of Rounds</label>
+              <select id="totalRounds">
+                <option value="3">3 rounds</option>
+                <option value="5" selected>5 rounds</option>
+                <option value="10">10 rounds</option>
+                <option value="15">15 rounds</option>
+                <option value="20">20 rounds</option>
+              </select>
+            </div>
+
+            <div class="divider"></div>
+
+            <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
+              <p>📌 Rounds will be limited to number of images uploaded</p>
+              <p style="margin-top:8px;">💡 Upload at least as many images as rounds</p>
+            </div>
+
+            <button class="btn btn-success w-full" id="createGameBtn" onclick="createGame()" disabled>
+              🚀 Create Game Room
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: Room Created - Share Link -->
+    <div id="setupStep2" class="hidden" style="text-align:center;max-width:600px;margin:0 auto;animation:fadeIn 0.5s ease;">
+      <div style="font-size:4rem;margin-bottom:16px;">🎉</div>
+      <h1 style="font-size:2.2rem;">Game Room Created!</h1>
+      <p class="subtitle" style="margin:8px auto 24px;">Share this link with your friends to join the game</p>
+
+      <div class="share-link-box">
+        <input type="text" id="shareLinkInput" readonly>
+        <button class="btn btn-primary btn-sm" onclick="copyShareLink()">📋 Copy</button>
+      </div>
+
+      <div class="card mt-3" style="text-align:left;">
+        <h3 style="margin-bottom:16px;">📊 Game Summary</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="result-stat">📸 <span id="summaryImages">0</span> images</div>
+          <div class="result-stat">🔄 <span id="summaryRounds">0</span> rounds</div>
+          <div class="result-stat">⏱️ <span id="summaryTime">30</span>s per round</div>
+          <div class="result-stat">🎯 Time-based scoring</div>
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <a class="btn btn-primary btn-lg" id="goToLobbyBtn">
+          🎮 Go to Game Lobby →
+        </a>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // ==================== STATE ====================
+    let images = []; // [{ file, answer, preview }]
+    let roomId = null;
+    let hostId = null;
+
+    // ==================== FILE UPLOAD ====================
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+
+    uploadZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+    // Drag and drop
+    uploadZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadZone.classList.add('drag-over');
+    });
+    uploadZone.addEventListener('dragleave', () => {
+      uploadZone.classList.remove('drag-over');
+    });
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('drag-over');
+      handleFiles(e.dataTransfer.files);
+    });
+
+    function handleFiles(fileList) {
+      const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+      if (files.length === 0) return;
+
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          // Try to extract a name from filename
+          const baseName = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+          images.push({
+            file: file,
+            answer: '',
+            preview: e.target.result
+          });
+          renderImageGrid();
+          updateCreateButton();
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function renderImageGrid() {
+      const grid = document.getElementById('imageGrid');
+      grid.innerHTML = '';
+
+      images.forEach((img, i) => {
+        const item = document.createElement('div');
+        item.className = 'image-item';
+        item.innerHTML = `
+          <img src="${img.preview}" alt="Place image ${i + 1}">
+          <div class="image-info">
+            <input type="text" 
+              placeholder="Enter place name (answer)..." 
+              value="${img.answer}" 
+              onchange="updateAnswer(${i}, this.value)"
+              style="font-size:0.9rem;padding:10px 14px;">
+          </div>
+          <button class="delete-btn" onclick="deleteImage(${i})" title="Remove">×</button>
+        `;
+        grid.appendChild(item);
+      });
+
+      const counter = document.getElementById('imageCounter');
+      const countEl = document.getElementById('imageCount');
+      if (images.length > 0) {
+        counter.style.display = 'block';
+        countEl.textContent = images.length;
+      } else {
+        counter.style.display = 'none';
+      }
+    }
+
+    function updateAnswer(index, value) {
+      images[index].answer = value.trim();
+      updateCreateButton();
+    }
+
+    function deleteImage(index) {
+      images.splice(index, 1);
+      renderImageGrid();
+      updateCreateButton();
+    }
+
+    function updateCreateButton() {
+      const btn = document.getElementById('createGameBtn');
+      const allHaveAnswers = images.length > 0 && images.every(img => img.answer.length > 0);
+      btn.disabled = !allHaveAnswers;
+    }
+
+    // ==================== CREATE GAME ====================
+    async function createGame() {
+      const btn = document.getElementById('createGameBtn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Creating...';
+
+      try {
+        // 1. Create room
+        const createRes = await fetch('/api/create-room', { method: 'POST' });
+        const createData = await createRes.json();
+        roomId = createData.roomId;
+        hostId = createData.hostId;
+
+        // 2. Upload images
+        const formData = new FormData();
+        const answers = [];
+        images.forEach((img) => {
+          formData.append('images', img.file);
+          answers.push(img.answer);
+        });
+        formData.append('answers', JSON.stringify(answers));
+
+        await fetch(`/api/upload/${roomId}`, {
+          method: 'POST',
+          body: formData
+        });
+
+        // 3. Update settings
+        const roundTime = document.getElementById('roundTime').value;
+        const totalRounds = document.getElementById('totalRounds').value;
+
+        await fetch(`/api/settings/${roomId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roundTime, totalRounds })
+        });
+
+        // 4. Show share screen
+        showShareScreen();
+      } catch (err) {
+        console.error(err);
+        showToast('Failed to create game. Please try again.', 'warning');
+        btn.disabled = false;
+        btn.textContent = '🚀 Create Game Room';
+      }
+    }
+
+    function showShareScreen() {
+      document.getElementById('setupStep1').classList.add('hidden');
+      document.getElementById('setupStep2').classList.remove('hidden');
+
+      const baseUrl = window.location.origin;
+      const shareLink = `${baseUrl}/play/${roomId}`;
+      document.getElementById('shareLinkInput').value = shareLink;
+
+      document.getElementById('summaryImages').textContent = images.length;
+      document.getElementById('summaryRounds').textContent = document.getElementById('totalRounds').value;
+      document.getElementById('summaryTime').textContent = document.getElementById('roundTime').value;
+
+      // Set lobby link with host credentials
+      document.getElementById('goToLobbyBtn').href = `/play/${roomId}?host=${hostId}`;
+    }
+
+    function copyShareLink() {
+      const input = document.getElementById('shareLinkInput');
+      navigator.clipboard.writeText(input.value).then(() => {
+        showToast('Link copied to clipboard! 📋', 'success');
+      });
+    }
+
+    // ==================== TOASTS ====================
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${type}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 4000);
+    }
+  </script>
+</body>
+</html>

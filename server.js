@@ -1,0 +1,516 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*' },
+  maxHttpBufferSize: 10e6 // 10MB for image uploads
+});
+
+// Multer setup - store in memory
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB per file
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only images allowed'));
+  }
+});
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+
+// ==================== GAME STATE ====================
+const rooms = new Map();
+
+function createRoom(hostId) {
+  const roomId = uuidv4().slice(0, 8);
+  rooms.set(roomId, {
+    id: roomId,
+    hostId: hostId,
+    hostSocketId: null,
+    images: [],           // [{ data: base64, name: string, answer: string }]
+    players: new Map(),   // socketId -> { id, name, score, answers: [] }
+    settings: {
+      roundTime: 30,      // seconds
+      totalRounds: 5
+    },
+    state: 'setup',       // setup | lobby | playing | roundResult | finished
+    currentRound: 0,
+    roundStartTime: null,
+    roundTimer: null,
+    roundAnswered: new Set(), // socketIds who answered correctly this round
+    createdAt: Date.now()
+  });
+  return roomId;
+}
+
+// Cleanup old rooms (older than 3 hours)
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, room] of rooms) {
+    if (now - room.createdAt > 3 * 60 * 60 * 1000) {
+      if (room.roundTimer) clearTimeout(room.roundTimer);
+      rooms.delete(id);
+    }
+  }
+}, 60 * 1000);
+
+// ==================== REST ENDPOINTS ====================
+
+// Create a new room
+app.post('/api/create-room', (req, res) => {
+  const hostId = uuidv4().slice(0, 12);
+  const roomId = createRoom(hostId);
+  res.json({ roomId, hostId });
+});
+
+// Upload images to a room
+app.post('/api/upload/:roomId', upload.array('images', 20), (req, res) => {
+  const { roomId } = req.params;
+  const room = rooms.get(roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+
+  const answers = JSON.parse(req.body.answers || '[]');
+
+  req.files.forEach((file, i) => {
+    const base64 = file.buffer.toString('base64');
+    const dataUrl = `data:${file.mimetype};base64,${base64}`;
+    room.images.push({
+      data: dataUrl,
+      name: file.originalname,
+      answer: answers[i] || 'Unknown'
+    });
+  });
+
+  res.json({ count: room.images.length, images: room.images.map((img, i) => ({ index: i, name: img.name, answer: img.answer })) });
+});
+
+// Update room settings
+app.post('/api/settings/:roomId', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+
+  const { roundTime, totalRounds } = req.body;
+  if (roundTime) room.settings.roundTime = parseInt(roundTime);
+  if (totalRounds) room.settings.totalRounds = parseInt(totalRounds);
+
+  res.json({ settings: room.settings });
+});
+
+// Delete an image from room
+app.delete('/api/image/:roomId/:index', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+
+  const index = parseInt(req.params.index);
+  if (index >= 0 && index < room.images.length) {
+    room.images.splice(index, 1);
+  }
+  res.json({ count: room.images.length });
+});
+
+// Get room info (for join page)
+app.get('/api/room/:roomId', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+
+  res.json({
+    id: room.id,
+    state: room.state,
+    playerCount: room.players.size,
+    settings: room.settings,
+    imageCount: room.images.length
+  });
+});
+
+// Serve game page for room links
+app.get('/play/:roomId', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'game.html'));
+});
+
+// ==================== SOCKET.IO EVENTS ====================
+
+io.on('connection', (socket) => {
+  console.log(`Connected: ${socket.id}`);
+
+  // Host joins their room
+  socket.on('host-join', ({ roomId, hostId }) => {
+    const room = rooms.get(roomId);
+    if (!room || room.hostId !== hostId) {
+      socket.emit('error-msg', { message: 'Invalid room or host ID' });
+      return;
+    }
+    room.hostSocketId = socket.id;
+    socket.join(roomId);
+    socket.roomId = roomId;
+    socket.isHost = true;
+    room.state = 'lobby';
+
+    socket.emit('room-joined', {
+      roomId,
+      isHost: true,
+      settings: room.settings,
+      imageCount: room.images.length,
+      players: getPlayerList(room)
+    });
+
+    console.log(`Host joined room ${roomId}`);
+  });
+
+  // Player joins a room
+  socket.on('player-join', ({ roomId, playerName }) => {
+    const room = rooms.get(roomId);
+    if (!room) {
+      socket.emit('error-msg', { message: 'Room not found' });
+      return;
+    }
+
+    if (room.state === 'finished') {
+      socket.emit('error-msg', { message: 'This game has already ended' });
+      return;
+    }
+
+    const player = {
+      id: socket.id,
+      name: playerName.trim().slice(0, 20),
+      score: 0,
+      answers: [],
+      streak: 0
+    };
+
+    room.players.set(socket.id, player);
+    socket.join(roomId);
+    socket.roomId = roomId;
+    socket.isHost = false;
+
+    socket.emit('room-joined', {
+      roomId,
+      isHost: false,
+      playerName: player.name,
+      state: room.state,
+      settings: room.settings,
+      players: getPlayerList(room)
+    });
+
+    // Notify everyone
+    io.to(roomId).emit('player-update', {
+      players: getPlayerList(room),
+      message: `${player.name} joined the game!`
+    });
+
+    // If game is in progress, send current round info
+    if (room.state === 'playing') {
+      const elapsed = Date.now() - room.roundStartTime;
+      const remaining = Math.max(0, room.settings.roundTime * 1000 - elapsed);
+      socket.emit('round-start', {
+        round: room.currentRound,
+        totalRounds: room.settings.totalRounds,
+        image: room.images[room.currentRound - 1].data,
+        timeRemaining: remaining,
+        totalTime: room.settings.roundTime * 1000,
+        hint: getHint(room.images[room.currentRound - 1].answer, elapsed, room.settings.roundTime * 1000)
+      });
+    }
+
+    console.log(`Player "${player.name}" joined room ${roomId}`);
+  });
+
+  // Host starts the game
+  socket.on('start-game', ({ roomId }) => {
+    const room = rooms.get(roomId);
+    if (!room || !socket.isHost) return;
+
+    if (room.images.length === 0) {
+      socket.emit('error-msg', { message: 'No images uploaded! Add some images first.' });
+      return;
+    }
+
+    // Adjust total rounds to available images
+    room.settings.totalRounds = Math.min(room.settings.totalRounds, room.images.length);
+    room.currentRound = 0;
+    room.state = 'playing';
+
+    // Reset all scores
+    for (const player of room.players.values()) {
+      player.score = 0;
+      player.answers = [];
+      player.streak = 0;
+    }
+
+    io.to(roomId).emit('game-started', {
+      totalRounds: room.settings.totalRounds,
+      roundTime: room.settings.roundTime,
+      playerCount: room.players.size
+    });
+
+    // Start first round after a short delay
+    setTimeout(() => startRound(room), 2000);
+  });
+
+  // Player submits a guess
+  socket.on('submit-guess', ({ roomId, guess }) => {
+    const room = rooms.get(roomId);
+    if (!room || room.state !== 'playing') return;
+
+    const player = room.players.get(socket.id);
+    if (!player) return;
+
+    // Already answered correctly this round
+    if (room.roundAnswered.has(socket.id)) {
+      socket.emit('guess-result', { correct: true, alreadyAnswered: true });
+      return;
+    }
+
+    const currentImage = room.images[room.currentRound - 1];
+    const isCorrect = checkAnswer(guess, currentImage.answer);
+    const elapsed = Date.now() - room.roundStartTime;
+    const totalTime = room.settings.roundTime * 1000;
+
+    if (isCorrect) {
+      // Time-based scoring: faster = more points
+      const timeRatio = elapsed / totalTime;
+      let points = Math.round(1000 - (timeRatio * 900));
+      points = Math.max(100, Math.min(1000, points));
+
+      // Streak bonus
+      player.streak++;
+      if (player.streak >= 3) {
+        points += 200; // Streak bonus
+      } else if (player.streak >= 2) {
+        points += 100;
+      }
+
+      // Position bonus (first correct gets extra)
+      const position = room.roundAnswered.size + 1;
+      if (position === 1) points += 300;
+      else if (position === 2) points += 150;
+      else if (position === 3) points += 50;
+
+      player.score += points;
+      player.answers.push({ round: room.currentRound, correct: true, points, time: elapsed });
+      room.roundAnswered.add(socket.id);
+
+      socket.emit('guess-result', {
+        correct: true,
+        points,
+        totalScore: player.score,
+        position,
+        streak: player.streak,
+        timeTaken: elapsed
+      });
+
+      // Update leaderboard for everyone
+      io.to(roomId).emit('leaderboard-update', {
+        players: getPlayerList(room),
+        answeredCount: room.roundAnswered.size,
+        totalPlayers: room.players.size
+      });
+    } else {
+      socket.emit('guess-result', { correct: false, guess });
+    }
+  });
+
+  // Disconnect handling
+  socket.on('disconnect', () => {
+    if (!socket.roomId) return;
+    const room = rooms.get(socket.roomId);
+    if (!room) return;
+
+    if (socket.isHost) {
+      // Host left - notify players but keep room alive for a while
+      io.to(socket.roomId).emit('host-disconnected');
+    } else {
+      const player = room.players.get(socket.id);
+      room.players.delete(socket.id);
+      if (player) {
+        io.to(socket.roomId).emit('player-update', {
+          players: getPlayerList(room),
+          message: `${player.name} left the game`
+        });
+      }
+    }
+
+    console.log(`Disconnected: ${socket.id}`);
+  });
+});
+
+// ==================== GAME LOGIC ====================
+
+function startRound(room) {
+  room.currentRound++;
+  if (room.currentRound > room.settings.totalRounds) {
+    endGame(room);
+    return;
+  }
+
+  room.state = 'playing';
+  room.roundStartTime = Date.now();
+  room.roundAnswered = new Set();
+
+  const currentImage = room.images[room.currentRound - 1];
+
+  io.to(room.id).emit('round-start', {
+    round: room.currentRound,
+    totalRounds: room.settings.totalRounds,
+    image: currentImage.data,
+    timeRemaining: room.settings.roundTime * 1000,
+    totalTime: room.settings.roundTime * 1000,
+    answerLength: currentImage.answer.length,
+    wordCount: currentImage.answer.split(/\s+/).length
+  });
+
+  // Send hints at intervals
+  const hintInterval = setInterval(() => {
+    if (room.state !== 'playing') {
+      clearInterval(hintInterval);
+      return;
+    }
+    const elapsed = Date.now() - room.roundStartTime;
+    const totalTime = room.settings.roundTime * 1000;
+
+    if (elapsed >= totalTime * 0.5) {
+      io.to(room.id).emit('hint', {
+        type: 'first-letter',
+        value: currentImage.answer.charAt(0).toUpperCase(),
+        message: `Hint: Starts with "${currentImage.answer.charAt(0).toUpperCase()}"`
+      });
+    }
+
+    if (elapsed >= totalTime * 0.75) {
+      const wordCount = currentImage.answer.split(/\s+/).length;
+      io.to(room.id).emit('hint', {
+        type: 'word-count',
+        value: wordCount,
+        message: `Hint: ${wordCount} word${wordCount > 1 ? 's' : ''}`
+      });
+      clearInterval(hintInterval);
+    }
+  }, 1000);
+
+  // End round timer
+  room.roundTimer = setTimeout(() => {
+    clearInterval(hintInterval);
+    endRound(room);
+  }, room.settings.roundTime * 1000);
+}
+
+function endRound(room) {
+  room.state = 'roundResult';
+  const currentImage = room.images[room.currentRound - 1];
+
+  // Mark streak broken for players who didn't answer
+  for (const [socketId, player] of room.players) {
+    if (!room.roundAnswered.has(socketId)) {
+      player.streak = 0;
+      player.answers.push({ round: room.currentRound, correct: false, points: 0, time: null });
+    }
+  }
+
+  io.to(room.id).emit('round-end', {
+    round: room.currentRound,
+    totalRounds: room.settings.totalRounds,
+    correctAnswer: currentImage.answer,
+    image: currentImage.data,
+    players: getPlayerList(room),
+    answeredCount: room.roundAnswered.size,
+    totalPlayers: room.players.size
+  });
+
+  // Auto-advance to next round after 5 seconds
+  room.roundTimer = setTimeout(() => {
+    startRound(room);
+  }, 5000);
+}
+
+function endGame(room) {
+  room.state = 'finished';
+  if (room.roundTimer) clearTimeout(room.roundTimer);
+
+  const players = getPlayerList(room);
+  players.sort((a, b) => b.score - a.score);
+
+  io.to(room.id).emit('game-over', {
+    players,
+    winner: players[0] || null,
+    totalRounds: room.settings.totalRounds
+  });
+}
+
+function getPlayerList(room) {
+  const players = [];
+  for (const player of room.players.values()) {
+    players.push({
+      id: player.id,
+      name: player.name,
+      score: player.score,
+      streak: player.streak,
+      correctAnswers: player.answers.filter(a => a.correct).length
+    });
+  }
+  return players.sort((a, b) => b.score - a.score);
+}
+
+function checkAnswer(guess, correctAnswer) {
+  if (!guess || !correctAnswer) return false;
+
+  const normalize = (str) => str.toLowerCase().trim()
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ');
+
+  const g = normalize(guess);
+  const c = normalize(correctAnswer);
+
+  // Exact match
+  if (g === c) return true;
+
+  // Contains match (for partial answers)
+  if (c.includes(g) && g.length >= c.length * 0.6) return true;
+  if (g.includes(c)) return true;
+
+  // Levenshtein distance for typo tolerance
+  const distance = levenshtein(g, c);
+  const maxLen = Math.max(g.length, c.length);
+  if (maxLen > 0 && distance / maxLen <= 0.2) return true; // Allow 20% typos
+
+  return false;
+}
+
+function levenshtein(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) =>
+    Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+function getHint(answer, elapsed, totalTime) {
+  const hints = [];
+  if (elapsed >= totalTime * 0.5) {
+    hints.push({ type: 'first-letter', value: answer.charAt(0).toUpperCase() });
+  }
+  if (elapsed >= totalTime * 0.75) {
+    hints.push({ type: 'word-count', value: answer.split(/\s+/).length });
+  }
+  return hints;
+}
+
+// ==================== START SERVER ====================
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🌍 Guess the Place server running on port ${PORT}`);
+  console.log(`   Open http://localhost:${PORT} to play!`);
+});

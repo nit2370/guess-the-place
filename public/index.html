@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Guess the Place - A real-time multiplayer game where you guess famous places from images. Play with friends online!">
+  <title>Guess the Place 🌍 | Multiplayer Place Guessing Game</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .hero {
+      text-align: center;
+      padding: 80px 20px;
+      animation: fadeIn 0.8s ease;
+    }
+    .hero h1 {
+      margin-bottom: 16px;
+    }
+    .hero h1 .gradient {
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      margin-top: 40px;
+      flex-wrap: wrap;
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      max-width: 900px;
+      margin: 60px auto 0;
+      animation: fadeIn 1s ease 0.3s backwards;
+    }
+    .feature-card {
+      padding: 28px;
+    }
+    .feature-card .icon {
+      font-size: 2.5rem;
+      margin-bottom: 16px;
+    }
+    .feature-card h3 {
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+    .join-section {
+      margin-top: 60px;
+      animation: fadeIn 1s ease 0.5s backwards;
+    }
+    .join-form {
+      display: flex;
+      gap: 12px;
+      max-width: 500px;
+      margin: 20px auto 0;
+    }
+    .join-form input {
+      flex: 1;
+    }
+    .footer {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 40px;
+      position: relative;
+      z-index: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-animation">
+    <div class="orb"></div>
+    <div class="orb"></div>
+    <div class="orb"></div>
+  </div>
+
+  <nav>
+    <div class="logo"><span class="emoji">🌍</span>GuessThePlace</div>
+  </nav>
+
+  <main class="container">
+    <div class="hero">
+      <h1>Guess Famous Places<br>From <span class="gradient">Images</span></h1>
+      <p class="subtitle">
+        Challenge your friends in real-time! Upload images of famous places, 
+        share a link, and compete to see who's the ultimate geography genius.
+      </p>
+
+      <div class="hero-actions">
+        <a href="/host.html" class="btn btn-primary btn-lg" id="hostBtn">
+          🎯 Host a Game
+        </a>
+        <button class="btn btn-secondary btn-lg" id="joinBtn" onclick="document.getElementById('joinSection').scrollIntoView({behavior:'smooth'})">
+          🎮 Join a Game
+        </button>
+      </div>
+    </div>
+
+    <div class="features">
+      <div class="card feature-card">
+        <div class="icon">📸</div>
+        <h3>Upload Your Images</h3>
+        <p>Host creates a custom game by uploading photos of famous places with their names.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="icon">⚡</div>
+        <h3>Time-Based Scoring</h3>
+        <p>Answer faster to earn more points! Streak bonuses reward consistency.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="icon">👥</div>
+        <h3>Play with 50+ Friends</h3>
+        <p>Share a link and play in real-time with up to 50 friends simultaneously.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="icon">🏆</div>
+        <h3>Live Leaderboard</h3>
+        <p>Watch rankings update in real-time with a beautiful podium finish.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="icon">💡</div>
+        <h3>Smart Hints</h3>
+        <p>Stuck? Hints appear automatically as time runs out to keep everyone engaged.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="icon">🎯</div>
+        <h3>Typo Tolerant</h3>
+        <p>Our smart matching system accepts minor typos and partial answers.</p>
+      </div>
+    </div>
+
+    <div class="join-section text-center" id="joinSection">
+      <h2>Join a Game</h2>
+      <p class="subtitle" style="margin: 0 auto;">Have a room code? Enter it below to join the fun!</p>
+      <div class="join-form">
+        <input type="text" id="roomCodeInput" placeholder="Enter room code..." maxlength="8">
+        <button class="btn btn-primary" id="joinRoomBtn" onclick="joinRoom()">Join →</button>
+      </div>
+    </div>
+  </main>
+
+  <div class="footer">
+    <p>🌍 Guess the Place — Made for fun with friends</p>
+  </div>
+
+  <script>
+    function joinRoom() {
+      const code = document.getElementById('roomCodeInput').value.trim();
+      if (code) {
+        window.location.href = `/play/${code}`;
+      }
+    }
+
+    document.getElementById('roomCodeInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') joinRoom();
+    });
+  </script>
+</body>
+</html>
