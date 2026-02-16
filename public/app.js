@@ -18,9 +18,26 @@ let currentHints = [];
 
     if (hostId) {
         isHost = true;
-        // Host auto-joins
-        socket.emit('host-join', { roomId, hostId });
+        // Host skips join screen entirely
+        document.getElementById('joinScreen').classList.remove('active');
         document.getElementById('navBadge').innerHTML = '<span class="badge badge-purple">🎯 Host</span>';
+        socket.emit('host-join', { roomId, hostId });
+    } else {
+        // Validate room exists before showing join screen
+        fetch(`/api/room/${roomId}`).then(r => r.json()).then(data => {
+            if (data.error) {
+                showError('Room not found! Check the link and try again.');
+                document.getElementById('joinBtn').disabled = true;
+            } else if (data.state === 'setup') {
+                showError('Room is still being set up. Wait for the host to finish.');
+                document.getElementById('joinBtn').disabled = true;
+            } else if (data.state === 'finished') {
+                showError('This game has already ended.');
+                document.getElementById('joinBtn').disabled = true;
+            }
+        }).catch(() => {
+            showError('Could not connect to server. Try refreshing.');
+        });
     }
 
     // Enter key for name input
@@ -31,6 +48,14 @@ let currentHints = [];
     // Enter key for guess input
     document.getElementById('guessInput').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') submitGuess();
+    });
+
+    // Handle reconnection
+    socket.on('disconnect', () => {
+        showToast('Connection lost. Reconnecting...', 'warning');
+    });
+    socket.on('reconnect', () => {
+        showToast('Reconnected!', 'success');
     });
 })();
 

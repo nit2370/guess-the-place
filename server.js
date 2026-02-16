@@ -177,6 +177,11 @@ io.on('connection', (socket) => {
       return;
     }
 
+    if (room.state === 'setup') {
+      socket.emit('error-msg', { message: 'Room is still being set up. Wait for the host to share the link.' });
+      return;
+    }
+
     const player = {
       id: socket.id,
       name: playerName.trim().slice(0, 20),
@@ -367,6 +372,7 @@ function startRound(room) {
   });
 
   // Send hints at intervals
+  let hintSent = { firstLetter: false, wordCount: false };
   const hintInterval = setInterval(() => {
     if (room.state !== 'playing') {
       clearInterval(hintInterval);
@@ -375,7 +381,8 @@ function startRound(room) {
     const elapsed = Date.now() - room.roundStartTime;
     const totalTime = room.settings.roundTime * 1000;
 
-    if (elapsed >= totalTime * 0.5) {
+    if (elapsed >= totalTime * 0.5 && !hintSent.firstLetter) {
+      hintSent.firstLetter = true;
       io.to(room.id).emit('hint', {
         type: 'first-letter',
         value: currentImage.answer.charAt(0).toUpperCase(),
@@ -383,7 +390,8 @@ function startRound(room) {
       });
     }
 
-    if (elapsed >= totalTime * 0.75) {
+    if (elapsed >= totalTime * 0.75 && !hintSent.wordCount) {
+      hintSent.wordCount = true;
       const wordCount = currentImage.answer.split(/\s+/).length;
       io.to(room.id).emit('hint', {
         type: 'word-count',
