@@ -184,9 +184,17 @@ socket.on('guess-result', (data) => {
     if (data.alreadyAnswered) return;
 
     if (data.correct) {
-        // Show success feedback
-        showFeedback('correct', `+${data.points} points!`);
-        showScorePopup(data.points, data.streak, data.position);
+        // Different feedback based on match type
+        let feedbackText = `+${data.points} points!`;
+        let feedbackType = 'correct';
+        if (data.matchType === 'close') {
+            feedbackText = `Close enough! +${data.points} pts (${data.matchQuality}% match)`;
+        } else if (data.matchType === 'partial') {
+            feedbackText = `Partial match! +${data.points} pts (${data.matchQuality}% match)`;
+        }
+
+        showFeedback(feedbackType, feedbackText);
+        showScorePopup(data.points, data.streak, data.position, data.matchType);
 
         // Disable input
         document.getElementById('guessInput').disabled = true;
@@ -194,9 +202,15 @@ socket.on('guess-result', (data) => {
         document.getElementById('answerSection').classList.add('hidden');
         document.getElementById('answeredCorrectly').classList.remove('hidden');
 
-        if (data.streak >= 2) {
-            const el = document.getElementById('answeredCorrectly');
+        const el = document.getElementById('answeredCorrectly');
+        if (data.matchType === 'partial') {
+            el.innerHTML = `🟡 Partial match! +${data.points} pts — waiting for round to end...`;
+        } else if (data.matchType === 'close') {
+            el.innerHTML = `✅ Close enough! +${data.points} pts ${data.streak >= 2 ? '🔥' : ''} — waiting for round to end...`;
+        } else if (data.streak >= 2) {
             el.innerHTML = `✅ Correct! +${data.points} pts ${data.streak >= 3 ? '🔥🔥🔥' : '🔥'} ${data.streak} streak!`;
+        } else {
+            el.innerHTML = `✅ Correct! +${data.points} pts — waiting for round to end...`;
         }
     } else {
         showFeedback('incorrect', 'Wrong! Try again');
@@ -383,11 +397,15 @@ function showFeedback(type, text) {
     setTimeout(() => el.remove(), 1500);
 }
 
-function showScorePopup(points, streak, position) {
+function showScorePopup(points, streak, position, matchType) {
     const el = document.createElement('div');
     el.className = 'score-popup';
+    let matchLabel = '';
+    if (matchType === 'close') matchLabel = '<div class="bonus-text">👍 Close enough!</div>';
+    else if (matchType === 'partial') matchLabel = '<div class="bonus-text">🟡 Partial match</div>';
     el.innerHTML = `
     <div class="points">+${points}</div>
+    ${matchLabel}
     ${position === 1 ? '<div class="bonus-text">🥇 First to answer!</div>' : ''}
     ${streak >= 3 ? '<div class="bonus-text">🔥 ' + streak + ' streak bonus!</div>' : (streak >= 2 ? '<div class="bonus-text">🔥 Streak!</div>' : '')}
   `;

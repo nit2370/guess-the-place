@@ -274,32 +274,44 @@ io.on('connection', (socket) => {
     }
 
     const currentImage = room.images[room.currentRound - 1];
-    const isCorrect = checkAnswer(guess, currentImage.answer);
+    const matchQuality = checkAnswer(guess, currentImage.answer); // 0 to 1.0
     const elapsed = Date.now() - room.roundStartTime;
     const totalTime = room.settings.roundTime * 1000;
 
-    if (isCorrect) {
+    if (matchQuality > 0) {
       // Time-based scoring: faster = more points
       const timeRatio = elapsed / totalTime;
-      let points = Math.round(1000 - (timeRatio * 900));
-      points = Math.max(100, Math.min(1000, points));
+      let basePoints = Math.round(1000 - (timeRatio * 900));
+      basePoints = Math.max(100, Math.min(1000, basePoints));
 
-      // Streak bonus
-      player.streak++;
-      if (player.streak >= 3) {
-        points += 200; // Streak bonus
-      } else if (player.streak >= 2) {
-        points += 100;
+      // Apply match quality multiplier
+      let points = Math.round(basePoints * matchQuality);
+
+      // Determine match type for UI feedback
+      let matchType = 'exact';     // 1.0
+      if (matchQuality < 1.0 && matchQuality >= 0.7) matchType = 'close';
+      else if (matchQuality < 0.7) matchType = 'partial';
+
+      // Streak bonus (only for close+ matches)
+      if (matchQuality >= 0.7) {
+        player.streak++;
+        if (player.streak >= 3) {
+          points += 200;
+        } else if (player.streak >= 2) {
+          points += 100;
+        }
       }
 
-      // Position bonus (first correct gets extra)
+      // Position bonus (first correct gets extra, only for close+ matches)
       const position = room.roundAnswered.size + 1;
-      if (position === 1) points += 300;
-      else if (position === 2) points += 150;
-      else if (position === 3) points += 50;
+      if (matchQuality >= 0.7) {
+        if (position === 1) points += 300;
+        else if (position === 2) points += 150;
+        else if (position === 3) points += 50;
+      }
 
       player.score += points;
-      player.answers.push({ round: room.currentRound, correct: true, points, time: elapsed });
+      player.answers.push({ round: room.currentRound, correct: true, points, time: elapsed, matchQuality });
       room.roundAnswered.add(socket.id);
 
       socket.emit('guess-result', {
@@ -308,7 +320,9 @@ io.on('connection', (socket) => {
         totalScore: player.score,
         position,
         streak: player.streak,
-        timeTaken: elapsed
+        timeTaken: elapsed,
+        matchType,
+        matchQuality: Math.round(matchQuality * 100)
       });
 
       // Update leaderboard for everyone
@@ -466,7 +480,7 @@ function getPlayerList(room) {
 }
 
 function checkAnswer(guess, correctAnswer) {
-  if (!guess || !correctAnswer) return false;
+  if (!guess || !correctAnswer) return 0;
 
   const normalize = (str) => str.toLowerCase().trim()
     .replace(/[^a-z0-9\s]/g, '')
@@ -474,20 +488,79 @@ function checkAnswer(guess, correctAnswer) {
 
   const g = normalize(guess);
   const c = normalize(correctAnswer);
+  if (!g || !c) return 0;
 
-  // Exact match
-  if (g === c) return true;
+  // Exact match → 1.0
+  if (g === c) return 1.0;
 
-  // Contains match (for partial answers)
-  if (c.includes(g) && g.length >= c.length * 0.6) return true;
-  if (g.includes(c)) return true;
+  // Full contains match → 0.9-1.0
+  if (g.includes(c)) return 1.0;
+  if (c.includes(g) && g.length >= c.length * 0.7) return 0.9;
 
-  // Levenshtein distance for typo tolerance
+  // Levenshtein on full string
   const distance = levenshtein(g, c);
   const maxLen = Math.max(g.length, c.length);
-  if (maxLen > 0 && distance / maxLen <= 0.2) return true; // Allow 20% typos
+  const ratio = maxLen > 0 ? distance / maxLen : 1;
 
-  return false;
+  // Very close (<=15% typos) → 0.9
+  if (ratio <= 0.15) return 0.9;
+  // Close (<=25% typos) → 0.8
+  if (ratio <= 0.25) return 0.8;
+  // Somewhat close (<=35% typos) → 0.7
+  if (ratio <= 0.35) return 0.7;
+
+  // Strip common words and compare
+  const stopWords = ['the', 'of', 'a', 'an', 'at', 'in', 'on', 'le', 'la', 'el', 'de', 'di', 'du'];
+  const stripStop = (str) => str.split(' ').filter(w => !stopWords.includes(w)).join(' ');
+  const gStripped = stripStop(g);
+  const cStripped = stripStop(c);
+  if (gStripped && cStripped) {
+    if (gStripped === cStripped) return 0.95;
+    const dStripped = levenshtein(gStripped, cStripped);
+    const maxStripped = Math.max(gStripped.length, cStripped.length);
+    const sRatio = maxStripped > 0 ? dStripped / maxStripped : 1;
+    if (sRatio <= 0.2) return 0.85;
+    if (sRatio <= 0.35) return 0.7;
+  }
+
+  // Word-by-word matching for partial credit
+  const gWords = g.split(' ').filter(w => w.length > 2);
+  const cWords = c.split(' ').filter(w => w.length > 2 && !stopWords.includes(w));
+  if (cWords.length > 0 && gWords.length > 0) {
+    let matchedWords = 0;
+    for (const cw of cWords) {
+      for (const gw of gWords) {
+        const wordDist = levenshtein(gw, cw);
+        const wordMax = Math.max(gw.length, cw.length);
+        if (wordMax > 0 && wordDist / wordMax <= 0.3) {
+          matchedWords++;
+          break;
+        }
+      }
+    }
+    const wordRatio = matchedWords / cWords.length;
+    // All key words match → 0.85
+    if (wordRatio >= 1.0) return 0.85;
+    // Most key words match → 0.6
+    if (wordRatio >= 0.6) return 0.6;
+    // Some key words match → partial credit
+    if (wordRatio >= 0.4) return 0.4;
+  }
+
+  // Partial contain match (shorter threshold) → 0.4
+  if (c.includes(g) && g.length >= c.length * 0.4) return 0.4;
+
+  // Vowel-stripped comparison → 0.65
+  const stripVowels = (str) => str.replace(/[aeiou]/g, '');
+  const gNoVowels = stripVowels(g);
+  const cNoVowels = stripVowels(c);
+  if (gNoVowels.length >= 3 && cNoVowels.length >= 3) {
+    const vDist = levenshtein(gNoVowels, cNoVowels);
+    const vMax = Math.max(gNoVowels.length, cNoVowels.length);
+    if (vMax > 0 && vDist / vMax <= 0.2) return 0.65;
+  }
+
+  return 0;
 }
 
 function levenshtein(a, b) {
