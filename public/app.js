@@ -371,21 +371,19 @@ function renderPodium(players) {
     const container = document.getElementById('podiumContainer');
     const top3 = players.slice(0, 3);
     const emojis = ['👑', '⭐', '🌟'];
+    // CSS order: 2nd on left (order:0), 1st in center (order:1), 3rd on right (order:2)
+    const cssOrder = [1, 0, 2]; // index 0=1st place→center, 1=2nd place→left, 2=3rd place→right
 
-    // Reorder for podium: 2nd, 1st, 3rd
-    const podiumOrder = [];
-    if (top3[1]) podiumOrder.push({ ...top3[1], place: 2 });
-    if (top3[0]) podiumOrder.push({ ...top3[0], place: 1 });
-    if (top3[2]) podiumOrder.push({ ...top3[2], place: 3 });
-
-    container.innerHTML = podiumOrder.map(p => `
-    <div class="podium-place" style="order:${p.place === 1 ? 1 : p.place === 2 ? 0 : 2}">
-      <div class="podium-avatar">${emojis[p.place - 1]}</div>
-      <div class="podium-name">${escapeHtml(p.name)}</div>
-      <div class="podium-score">${p.score.toLocaleString()} pts</div>
-      <div class="podium-bar">#${p.place}</div>
-    </div>
-  `).join('');
+    container.innerHTML = top3.map((p, i) => {
+        const place = i + 1;
+        return `
+      <div class="podium-place" style="order:${cssOrder[i]}">
+        <div class="podium-avatar">${emojis[i]}</div>
+        <div class="podium-name">${escapeHtml(p.name)}</div>
+        <div class="podium-score">${p.score.toLocaleString()} pts</div>
+        <div class="podium-bar">#${place}</div>
+      </div>`;
+    }).join('');
 }
 
 // ==================== VISUAL FEEDBACK ====================
