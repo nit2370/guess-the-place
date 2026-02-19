@@ -152,19 +152,29 @@ socket.on('round-start', (data) => {
     document.getElementById('answeredCount').textContent = '0';
     document.getElementById('totalPlayers').textContent = '0';
 
-    // Reset answer input
-    document.getElementById('guessInput').value = '';
-    document.getElementById('guessInput').disabled = false;
-    document.getElementById('submitGuessBtn').disabled = false;
-    document.getElementById('answerSection').classList.remove('hidden');
-    document.getElementById('answeredCorrectly').classList.add('hidden');
-    document.getElementById('hintsContainer').innerHTML = '';
+    // Host: hide answer input, show only image + leaderboard
+    if (isHost) {
+        document.getElementById('answerSection').classList.add('hidden');
+        document.getElementById('answeredCorrectly').classList.remove('hidden');
+        document.getElementById('answeredCorrectly').innerHTML = '🎯 You are the host — watching players answer!';
+        document.getElementById('hintsContainer').innerHTML = '';
+    } else {
+        // Reset answer input for players
+        document.getElementById('guessInput').value = '';
+        document.getElementById('guessInput').disabled = false;
+        document.getElementById('submitGuessBtn').disabled = false;
+        document.getElementById('answerSection').classList.remove('hidden');
+        document.getElementById('answeredCorrectly').classList.add('hidden');
+        document.getElementById('hintsContainer').innerHTML = '';
+    }
 
     // Start timer
     startTimer(data.timeRemaining, data.totalTime);
 
-    // Focus on input
-    setTimeout(() => document.getElementById('guessInput').focus(), 300);
+    // Focus on input (only for players)
+    if (!isHost) {
+        setTimeout(() => document.getElementById('guessInput').focus(), 300);
+    }
 });
 
 // Hint received
