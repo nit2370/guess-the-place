@@ -9,7 +9,9 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  maxHttpBufferSize: 10e6 // 10MB for image uploads
+  maxHttpBufferSize: 10e6, // 10MB for image uploads
+  pingTimeout: 60000,      // 60s before considering disconnected
+  pingInterval: 25000      // ping every 25s to keep alive
 });
 
 // Multer setup - store in memory
@@ -37,6 +39,7 @@ function createRoom(hostId) {
     hostSocketId: null,
     images: [],           // [{ data: base64, name: string, answer: string }]
     players: new Map(),   // socketId -> { id, name, score, answers: [] }
+    disconnectedPlayers: new Map(), // sessionId -> player data (preserved for rejoin)
     settings: {
       roundTime: 30,      // seconds
       totalRounds: 5
@@ -45,7 +48,7 @@ function createRoom(hostId) {
     currentRound: 0,
     roundStartTime: null,
     roundTimer: null,
-    roundAnswered: new Set(), // socketIds who answered correctly this round
+    roundAnswered: new Set(), // sessionIds who answered correctly this round
     createdAt: Date.now()
   });
   return roomId;
@@ -165,7 +168,7 @@ io.on('connection', (socket) => {
   });
 
   // Player joins a room
-  socket.on('player-join', ({ roomId, playerName }) => {
+  socket.on('player-join', ({ roomId, playerName, sessionId }) => {
     const room = rooms.get(roomId);
     if (!room) {
       socket.emit('error-msg', { message: 'Room not found' });
@@ -182,18 +185,34 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const player = {
-      id: socket.id,
-      name: playerName.trim().slice(0, 20),
-      score: 0,
-      answers: [],
-      streak: 0
-    };
+    // Check if this is a reconnecting player
+    let player;
+    let isReconnect = false;
+    if (sessionId && room.disconnectedPlayers.has(sessionId)) {
+      // Restore disconnected player's data
+      player = room.disconnectedPlayers.get(sessionId);
+      player.id = socket.id;
+      player.sessionId = sessionId;
+      room.disconnectedPlayers.delete(sessionId);
+      isReconnect = true;
+      console.log(`Player "${player.name}" reconnected to room ${roomId} with ${player.score} points`);
+    } else {
+      // New player
+      player = {
+        id: socket.id,
+        sessionId: sessionId || uuidv4().slice(0, 12),
+        name: playerName.trim().slice(0, 20),
+        score: 0,
+        answers: [],
+        streak: 0
+      };
+    }
 
     room.players.set(socket.id, player);
     socket.join(roomId);
     socket.roomId = roomId;
     socket.isHost = false;
+    socket.sessionId = player.sessionId;
 
     socket.emit('room-joined', {
       roomId,
@@ -201,13 +220,16 @@ io.on('connection', (socket) => {
       playerName: player.name,
       state: room.state,
       settings: room.settings,
-      players: getPlayerList(room)
+      players: getPlayerList(room),
+      sessionId: player.sessionId,
+      reconnected: isReconnect,
+      restoredScore: isReconnect ? player.score : 0
     });
 
     // Notify everyone
     io.to(roomId).emit('player-update', {
       players: getPlayerList(room),
-      message: `${player.name} joined the game!`
+      message: isReconnect ? `${player.name} reconnected!` : `${player.name} joined the game!`
     });
 
     // If game is in progress, send current round info
@@ -268,7 +290,8 @@ io.on('connection', (socket) => {
     if (!player) return;
 
     // Already answered correctly this round
-    if (room.roundAnswered.has(socket.id)) {
+    const playerSessionId = player.sessionId || socket.sessionId;
+    if (room.roundAnswered.has(playerSessionId)) {
       socket.emit('guess-result', { correct: true, alreadyAnswered: true });
       return;
     }
@@ -312,7 +335,7 @@ io.on('connection', (socket) => {
 
       player.score += points;
       player.answers.push({ round: room.currentRound, correct: true, points, time: elapsed, matchQuality });
-      room.roundAnswered.add(socket.id);
+      room.roundAnswered.add(playerSessionId);
 
       socket.emit('guess-result', {
         correct: true,
@@ -349,9 +372,17 @@ io.on('connection', (socket) => {
       const player = room.players.get(socket.id);
       room.players.delete(socket.id);
       if (player) {
+        // Preserve player data for rejoin (keep for 10 minutes)
+        const sid = player.sessionId || socket.sessionId;
+        if (sid) {
+          room.disconnectedPlayers.set(sid, player);
+          setTimeout(() => {
+            room.disconnectedPlayers.delete(sid);
+          }, 10 * 60 * 1000);
+        }
         io.to(socket.roomId).emit('player-update', {
           players: getPlayerList(room),
-          message: `${player.name} left the game`
+          message: `${player.name} disconnected (can rejoin)`
         });
       }
     }
@@ -429,7 +460,8 @@ function endRound(room) {
 
   // Mark streak broken for players who didn't answer
   for (const [socketId, player] of room.players) {
-    if (!room.roundAnswered.has(socketId)) {
+    const sid = player.sessionId || socketId;
+    if (!room.roundAnswered.has(sid)) {
       player.streak = 0;
       player.answers.push({ round: room.currentRound, correct: false, points: 0, time: null });
     }

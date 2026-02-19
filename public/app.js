@@ -5,6 +5,16 @@ let isHost = false;
 let playerName = '';
 let timerInterval = null;
 let currentHints = [];
+let sessionId = localStorage.getItem('gtp_sessionId') || '';
+
+// Generate session ID if not present
+function getOrCreateSessionId() {
+    if (!sessionId) {
+        sessionId = 'sid_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+        localStorage.setItem('gtp_sessionId', sessionId);
+    }
+    return sessionId;
+}
 
 // ==================== INIT ====================
 (function init() {
@@ -50,12 +60,22 @@ let currentHints = [];
         if (e.key === 'Enter') submitGuess();
     });
 
-    // Handle reconnection
+    // Handle reconnection — auto-rejoin with session
     socket.on('disconnect', () => {
         showToast('Connection lost. Reconnecting...', 'warning');
     });
-    socket.on('reconnect', () => {
-        showToast('Reconnected!', 'success');
+    socket.io.on('reconnect', () => {
+        showToast('Reconnected! Rejoining game...', 'success');
+        // Auto-rejoin if we have stored credentials
+        const storedName = localStorage.getItem('gtp_playerName');
+        const storedRoom = localStorage.getItem('gtp_roomId');
+        if (storedName && storedRoom === roomId && !isHost) {
+            socket.emit('player-join', { roomId, playerName: storedName, sessionId: getOrCreateSessionId() });
+        } else if (isHost) {
+            const params = new URLSearchParams(window.location.search);
+            const hostId = params.get('host');
+            if (hostId) socket.emit('host-join', { roomId, hostId });
+        }
     });
 })();
 
@@ -80,7 +100,11 @@ function joinGame() {
     document.getElementById('joinBtn').disabled = true;
     document.getElementById('joinBtn').textContent = '⏳ Joining...';
 
-    socket.emit('player-join', { roomId, playerName });
+    // Store name for auto-rejoin
+    localStorage.setItem('gtp_playerName', playerName);
+    localStorage.setItem('gtp_roomId', roomId);
+
+    socket.emit('player-join', { roomId, playerName, sessionId: getOrCreateSessionId() });
 }
 
 function showError(msg) {
@@ -98,6 +122,17 @@ socket.on('room-joined', (data) => {
     showScreen('lobbyScreen');
     updateLobby(data.players);
 
+    // Store session ID from server
+    if (data.sessionId) {
+        sessionId = data.sessionId;
+        localStorage.setItem('gtp_sessionId', sessionId);
+    }
+
+    // Show reconnection feedback
+    if (data.reconnected) {
+        showToast(`Welcome back! Your ${data.restoredScore} points have been restored.`, 'success');
+    }
+
     if (isHost) {
         document.getElementById('hostControls').classList.remove('hidden');
         document.getElementById('playerWaiting').classList.add('hidden');
@@ -107,7 +142,7 @@ socket.on('room-joined', (data) => {
         document.getElementById('navBadge').innerHTML = '<span class="badge badge-purple">🎯 Host</span>';
     }
 
-    // If game is already in progress (late joiner)
+    // If game is already in progress (late joiner / rejoiner)
     if (data.state === 'playing') {
         showScreen('playingScreen');
     }
